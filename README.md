@@ -1,199 +1,213 @@
-# OTA Community Edition (mono)-lith
+# SOR OTA Community Edition
 
-Easy to run, secure, open source [tuf](https://theupdateframework.io/)/[uptane](https://uptane.github.io/) over the air (OTA) updates.
+> Uptane 기반 차량 OTA(Over-The-Air) 업데이트 플랫폼  
+> 원본: [uptane/ota-community-edition](https://github.com/uptane/ota-community-edition)
 
-You may not want or need to run [ota-community-edition](https://github.com/advancedtelematic/ota-community-edition) using a microservice architecure. A monolith might fit your use case better if you just want to try `ota-community-edition` or if your organization doesn't need to serve millions of devices. A monolith architecture is easier to deploy and manage, and uses less resources.
+마이크로서비스 없이 **docker-compose 하나**로 전체 OTA 서버를 로컬에서 실행할 수 있습니다.  
+Mac (Apple Silicon / Intel), Windows 모두 지원합니다.
 
-This project bundles all the scala apps included in [ota-community-edition](https://github.com/advancedtelematic/ota-community-edition) into a application that can be executed in a single container. The app can be easily configured using a single configuration file and avoids the usage of environment variables to simplifly configuration. Additionally, a `docker-compose` file is provided to run the application. This means you no longer need a kubernetes cluster if you just want to try or test `ota-community-edition`.
+---
 
-For small deployments, you don't need kubernetes. This solution can fit your organization better. With this app you could run ota in a single machine/vm + mariadb and kafka.
+## 아키텍처 개요
 
-## Active branches
-
-Currently there are three active branches in this repository:
-
-- `master`. `ota-community-edition` running without webapp and with kafka, using a single scala app.
-
-- `webapp`. The webapp is broken in `ota-community-edition` and therefore is not included in `ota-lith/master`. The `webapp` branch includes patched version of `webapp` that does not rely on user profile and is therefore working with both `ota-community-edition` and `ota-lith`.
-
-## Dependency management
-  
-This project follows the upstream [UPTANE OTA](https://uptane.github.io/) (see [sources](https://github.com/uptane/)) projects.
-
-The following forks/branches are included:
-
-- tuf https://github.com/uptane/ota-tuf
-- director https://github.com/uptane/director
-- device-registry https://github.com/uptane/ota-device-registry
-- campaigner https://github.com/simao/campaigner
-- treehub https://github.com/uptane/treehub
-- libats https://github.com/uptane/libats
-
-The dependencies are managed using
-[git-subtree](https://man.archlinux.org/man/git-subtree.1) under the
-`repos` directory on this repository.
-
-To update to the latest changes from upstream ota-tuf, you could use for example:
-
-    git subtree pull --prefix repos/ota-tuf git@github.com:uptane/ota-tuf.git master --squash
-
-If you wish to make changes to ota-tuf, you could edit directly
-`repos/ota-tuf` and then commit the changes, then use `git-subtree` to
-split the changes and open a pull request upstream. However, a simpler
-way would be to just use `git diff` to generate a patch and apply that
-patch to the repository separately:
-
-    cd repos/ota-tuf
-    git diff . > tuf.patch
-    cd /home/user/my-ota-tuf
-    patch -p3 < tuf.patch
-    
-    # normal git flow to create a PR for ota-tuf
-    
-And then once those changes are merged upstream you could use `git
-subtree pull` to incorporate those changes.
-    
-## Building
-
-To build a container running the services, run `sbt docker:publishLocal`
-
-## Configuration
-
-Configuration is done through a single config file, rather than using enviroment variables. This is meant to simplify the deployment scripts and just pass a `configFile=file.conf` argument to the container, or when needed, using system properties (`-Dkey=value`). An example config file is provied in `ota-lith-ce.conf`.
-
-## Running
-
-If you already have kafka and mariadb instances you can just run the ota-lith binary using sbt or docker.
-
-### Using sbt
-
-You'll need a valid ota-lith.conf, then run:
-
-    sbt -Dconfig.file=$(pwd)/ota-lith.conf run
-
-### Using docker
-
-The scala apps run in a single container, but you'll need kafka and mariadb. Write a valid ota-lith.conf.
-
-    sbt docker:publishLocal
-    docker run --name=ota-lith -v $(pwd)/ota-lith.conf:/tmp/ota-lith.conf uptane/ota-lith:latest -Dconfig.file=/tmp/ota-lith.conf
-    
-If you don't have `sbt` or prefer to use a pre built image, you can use:
-
-    export img=uptane/ota-lith:$(git rev-parse master)
-    docker run --name=ota-lith -v $(pwd)/ota-lith.conf:/tmp/ota-lith.conf $img -Dconfig.file=/tmp/ota-lith.conf
-
-## Running With Docker Compose
-
-If you don't have kafka or mariadb running and just want to try ota-ce, run using docker-compose:
-
-1. Generate the required certificates using `scripts/gen-server-certs.sh` 
-
-2. Update /etc/hosts with the following host names:
+### 트래픽 흐름
 
 ```
-0.0.0.0         reposerver.ota.ce
-0.0.0.0         keyserver.ota.ce
-0.0.0.0         director.ota.ce
-0.0.0.0         treehub.ota.ce
-0.0.0.0         deviceregistry.ota.ce
-0.0.0.0         campaigner.ota.ce
-0.0.0.0         app.ota.ce
-0.0.0.0         ota.ce
+[차량/디바이스]                    [개발자/관리자]
+      │                                  │
+      │ mTLS 필수                        │ 일반 HTTP/HTTPS
+      ▼                                  ▼
+gateway:30443                    reverse-proxy:80
+      │                                  │
+      │ 버전 확인, 메타데이터             │ 이미지 업로드
+      │ 업데이트 다운로드                 │ 디바이스 관리
+      │ 상태 보고                        │ 캠페인 생성
+      ▼                                  ▼
+   ota-lith                          ota-lith
 ```
 
-3. build docker image or pull from docker
+- **gateway(30443)** — 차량 전용, mTLS 인증으로 허가된 차량만 접근 가능
+- **reverse-proxy(80)** — 관리자/개발자 전용 (추후 관리자 인증 추가 필요)
 
-`sbt docker:publishLocal`
+### 상세 라우팅
 
-Or:
+```
+[차량]
+    │
+    ▼
+gateway:30443 (mTLS)
+    │
+    ├─ /treehub/    ─────────→ ota-lith:7400  (OSTree 저장소)
+    ├─ /repo/       ─────────→ ota-lith:7100  (TUF 메타데이터)
+    ├─ /campaigner/ ─────────→ ota-lith:7600  (캠페인)
+    ├─ /core/       ─────────→ ota-lith:7500  (코어 서비스)
+    └─ /director/   ─→ reverse-proxy:80 ─→ ota-lith (director)
 
-    export img=uptane/ota-lith:$(git rev-parse master)
-    docker pull $img
-    docker tag $img uptane/ota-lith:latest
+[개발자]
+    │
+    ▼
+reverse-proxy:80 → ota-lith (관리 API)
+```
 
-4. Run docker-compose
- 
-`docker-compose -f ota-ce.yaml up`
+> `/director/` 경로만 reverse-proxy를 경유하고, 나머지는 gateway에서 ota-lith로 직접 연결됩니다.  
+> 현재는 포트 번호로 직접 연결되며, 추후 Traefik의 서비스 디스커버리로 서비스 추가/변경 시 gateway 설정을 건드리지 않도록 개선 예정입니다.
 
-5. Test
+### 포트 정리
 
-For example `curl director.ota.ce/health/version`
+| 컨테이너 | 포트 | 용도 | 보안 |
+|---|---|---|---|
+| gateway | 30443 | HTTPS (mTLS) — 차량 전용 | ✅ mTLS |
+| reverse-proxy | 80 | HTTP — 관리자/개발자 | ⚠️ 인증 없음 |
+| reverse-proxy | 8080 | Traefik 대시보드 | ⚠️ 인증 없음 |
+| db | 3306 | MariaDB | ⚠️ 비밀번호만 |
+| kafka | 9092 | Kafka 브로커 | ❌ 인증 없음 |
+| zookeeper | 2181 | Kafka 코디네이터 | ❌ 인증 없음 |
 
-6. You can now create device credentials and provision devices
+> **주의:** 아래 포트들은 현재 보안 설정이 없으므로 운영 환경에서는 방화벽으로 차단하거나 인증을 추가해야 합니다.
+> - DB(3306): 비밀번호만 알면 접근 가능
+> - Kafka(9092): 인증 없이 메시지 조작 가능
+> - Zookeeper(2181): Kafka 클러스터 설정 변경 가능
+> - reverse-proxy(80, 8080): mTLS 없는 평문 HTTP
 
-Run `scripts/gen-device.sh`. This will create a new dir in `ota-ce-gen/devices/:uuid` where `uuid` is the id of the new device. You can run `aktualizr` in that directory using:
+---
 
-    aktualizr --run-mode=once --config=config.toml
-    
-7. You can now deploy updates to the devices
+## 사전 요구사항
 
-## Deploy updates
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) 설치 및 실행
+- 메모리: Docker Desktop → Settings → Resources → **4GB 이상** 설정
 
-You can either use the API directly or use [ota-cli](https://github.com/simao/ota-cli/) to deploy updates. After provisioning devices (see above).
+---
 
-Before using the api or `ota-cli` you will need to generate a valid `credentials.zip`. Run `scripts/get-credentials.zip`.
+## 최초 1회 설정
 
-To deploy an update using the API and a custom campaign, see [api-updates.md](docs/api-updates.md).
+### 1. 저장소 클론
 
-To deploy an update using [ota-cli](https://github.com/simao/ota-cli/) with or without a custom campaign see [updates-ota-cli.md](docs/updates-ota-cli.md).
+```bash
+git clone https://github.com/seongyongju/sor_ota.git
+cd sor_ota
+```
 
-## FAQ
+### 2. /etc/hosts 설정
 
-### Who maintains ota-lith
+**Mac / Linux**
+```bash
+sudo nano /etc/hosts
+```
 
-ota-lith is a collection of scripts and configurations that aggregates
-upstream projects and makes it easier to run a complete OTA
-solution. These scripts and configurations are maintained by
-[simao](https://github.com/simao).
+아래 내용 추가:
+```
+0.0.0.0    reposerver.ota.ce
+0.0.0.0    keyserver.ota.ce
+0.0.0.0    director.ota.ce
+0.0.0.0    treehub.ota.ce
+0.0.0.0    deviceregistry.ota.ce
+0.0.0.0    campaigner.ota.ce
+0.0.0.0    app.ota.ce
+0.0.0.0    ota.ce
+```
 
-The actual OTA implementation is implemented and maintained by
-multiple uptane contributors under the [uptane
-organization](https://github.com/uptane/).
+**Windows**  
+`C:\Windows\System32\drivers\etc\hosts` 파일을 **메모장(관리자 권한)** 으로 열고 위 내용 추가
 
-There are currently multiple contributors to the upstream UPTANE
-repositories, most notably [toradex](https://toradex.com) which runs
-the same uptane implementation as part of the [torizon
-platform](https://app.torizon.io)
+### 3. 서버 인증서 생성
 
-### How does it keep up with changes on the Uptane Standard?
+```bash
+bash scripts/gen-server-certs.sh
+```
 
-All the [UPTANE repositories](https://github.com/uptane) are updated
-frequently and docker images are built and pushed to
-`hub.docker.io`. Periodically, these images are incorporated into
-ota-lith. This is usually just a case of updating the docker tags used
-and creating the containers again.
+---
 
-However, `webapp` and `campaigner` projects are not part of the UPTANE
-repositories and they are independently maintained by HERE Technologies
-GmbH. These changes might or might not be merged back into `ota-lith`,
-depending on the complexity of merging the changes.
+## 실행
 
-### What is the relationship with Advanced Telematic OTA Community Edition?
+```bash
+# DB 먼저 기동 (10~20초 대기)
+docker-compose -f ota-ce.yaml up db -d
 
-The OTA Community Edition (OTA CE) was initially created and developed
-by Advanced Telematic Systems GmbH. Advanced Telematic Systems GmbH (ATS)
-was acquired by HERE Technologies GmbH and developed OTA CE
-further. All changes to the already open source components continued
-to be published in the [ats github
-repository](https://github.com/advancedtelematic/).
+# 전체 서비스 기동
+docker-compose -f ota-ce.yaml up -d
 
-Recently, the [uptane github organization](https://github.com/uptane/)
-was created and all projects were forked into that organization. HERE
-Technologies continues to develop their OTA solution, publishing
-their open source changes to the ATS github repository.
+# 상태 확인
+docker-compose -f ota-ce.yaml ps
+```
 
-Changes made to the ATS github repository are merged back to the
-Uptane Repositories by the uptane contributors if they are considered
-important, and they are then used by ota-lith once the docker images
-are updated.
+모든 서비스가 `Up` 상태이면 정상입니다.
 
-The HERE OTA CE solution appears to be on a bug fix only mode, while
-the UPTANE OTA CE is actively developing new features. 
+```bash
+# 동작 확인
+curl director.ota.ce/health/version
+```
 
-## Related
+---
 
-- https://github.com/simao/ota-cli
-- https://github.com/advancedtelematic/ota-community-edition
-- https://docs.ota.here.com/getstarted/dev/index.html
-- https://docs.ota.here.com/ota-client/latest/aktualizr-config-options.html
+## 접속 주소
+
+| 용도 | 주소 |
+|---|---|
+| Director | http://director.ota.ce |
+| Device Registry | http://deviceregistry.ota.ce |
+| Repo Server | http://reposerver.ota.ce |
+| Treehub | http://treehub.ota.ce |
+| Traefik 대시보드 | http://localhost:8080 |
+
+---
+
+## 디바이스 등록 및 업데이트 배포
+
+```bash
+# 새 디바이스 인증서 생성
+bash scripts/gen-device.sh
+# → ota-ce-gen/devices/<uuid>/ 에 설정 파일 생성됨
+
+# credentials.zip 생성 (API/CLI 사용 시 필요)
+bash scripts/get-credentials.sh
+```
+
+업데이트 배포 방법:
+- API 사용 → [`docs/api-updates.md`](docs/api-updates.md)
+- ota-cli 사용 → [`docs/updates-ota-cli.md`](docs/updates-ota-cli.md)
+
+---
+
+## 종료
+
+```bash
+# 컨테이너 종료 (데이터 유지)
+docker-compose -f ota-ce.yaml down
+
+# 컨테이너 + 데이터 전체 삭제 (초기화)
+docker-compose -f ota-ce.yaml down -v
+```
+
+---
+
+## 사용 이미지
+
+모든 이미지는 `linux/amd64` (Windows, Intel Mac), `linux/arm64` (Apple Silicon) 멀티 플랫폼을 지원합니다.
+
+| 서비스 | 이미지 |
+|---|---|
+| DB | `jusy4901/ota-ce-db:latest` (MariaDB 10.4) |
+| Gateway | `jusy4901/ota-ce-gateway:latest` (Nginx) |
+| Kafka | `jusy4901/ota-ce-kafka:latest` |
+| OTA 서버 | `jusy4901/ota-ce-lith:latest` |
+| Reverse Proxy | `jusy4901/ota-ce-proxy:latest` (Traefik) |
+| Zookeeper | `jusy4901/ota-ce-zookeeper:latest` |
+
+---
+
+## 자주 묻는 질문
+
+**Q. `Got timeout reading communication packets` 로그가 계속 뜹니다.**  
+A. 정상입니다. 재시작 시 이전 DB 연결이 정리되는 과정에서 나오는 Warning이며 동작에 영향 없습니다.
+
+**Q. `docker-compose: command not found` 에러가 납니다.**  
+A. 최신 Docker Desktop은 띄어쓰기 버전을 사용합니다.
+```bash
+docker compose -f ota-ce.yaml up -d
+```
+
+**Q. Windows에서 포트 충돌 에러가 납니다.**  
+A. 3306, 80, 9092, 2181 포트가 이미 사용 중인지 확인하세요.
+```powershell
+netstat -ano | findstr :3306
+```
