@@ -7,6 +7,25 @@ DEVICES_DIR=ota-ce-gen/devices
 CWD=$(dirname $0)
 SERVER_NAME=ota.ce
 
+HOSTS=(
+  "127.0.0.1         reposerver.ota.ce"
+  "127.0.0.1         keyserver.ota.ce"
+  "127.0.0.1         director.ota.ce"
+  "127.0.0.1         treehub.ota.ce"
+  "127.0.0.1         deviceregistry.ota.ce"
+  "127.0.0.1         campaigner.ota.ce"
+  "127.0.0.1         app.ota.ce"
+  "127.0.0.1         ota.ce"
+)
+
+for entry in "${HOSTS[@]}"; do
+  host=$(echo "$entry" | awk '{print $2}')
+  if ! grep -qF "$host" /etc/hosts; then
+    echo "$entry" | sudo tee -a /etc/hosts > /dev/null
+    echo "Added to /etc/hosts: $entry"
+  fi
+done
+
 if [ -d "$SERVER_DIR" ] || [ -d "$DEVICES_DIR" ] ; then
     echo "${SERVER_DIR} or ${DEVICES_DIR} exists, aborting"
     exit 1
